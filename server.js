@@ -1,22 +1,61 @@
-const { default: axios } = require('axios');
-let express = require('express');
+const express = require("express");
+const axios = require("axios");
+const redis = require("redis");
 
-var starwarsURL = 'https://swapi.dev/api/';
+const app = express();
+const port = process.env.PORT || 3000;
 
-var app = express();
+let redisClient;
 
-app.get('/', (req, res) => {
-  res.send('<h1>Hello Welcome to Redis Cache </h1>');
+(async () => {
+  redisClient = redis.createClient();
+
+  redisClient.on("error", (error) => console.error(`Error : ${error}`));
+
+  await redisClient.connect();
+})();
+
+async function fetchApiData(species) {
+  const apiResponse = await axios.get(
+    `https://www.fishwatch.gov/api/species/${species}`
+  );
+  console.log("Request sent to the API");
+  return apiResponse.data;
+}
+
+async function getSpeciesData(req, res) {
+  const species = req.params.species;
+  let results;
+  let isCached = false;
+
+  try {
+    const cacheResults = await redisClient.get(species);
+    if (cacheResults) {
+      isCached = true;
+      results = JSON.parse(cacheResults);
+    } else {
+      results = await fetchApiData(species);
+      if (results.length === 0) {
+        throw "API returned an empty array";
+      }
+      await redisClient.set(species, JSON.stringify(results), {
+        EX: 10,
+        NX: true,
+      });
+    }
+
+    res.send({
+      fromCache: isCached,
+      data: results,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(404).send("Data unavailable");
+  }
+}
+
+app.get("/fish/:species", getSpeciesData);
+
+app.listen(port, () => {
+  console.log(`App listening on port ${port}`);
 });
-
-app.get('/starwars/:search', async (req, res) => {
-  let search = req.params.search;
-
-  console.log(starwarsURL + search,"_url");
-  let data = await axios(starwarsURL + search);
-
-  res.json({ data: data.data, info: 'data from 3rd party API' });
-});
-
-app.listen(3000, () => {
-  console.log('server is live on port 3000')});
